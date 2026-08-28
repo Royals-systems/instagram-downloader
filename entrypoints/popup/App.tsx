@@ -3,19 +3,19 @@ import { useState, useEffect } from 'react';
 import './App.css';
 
 function App() {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function fetchImage() {
+    async function fetchImages() {
       try {
         const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-        if (!tab||!tab.id) return;
+        if (!tab || !tab.id) return;
 
         const response = await browser.tabs.sendMessage(tab.id, { type: 'GET_POST_IMAGE' });
 
-        if (response?.url) {
-          setImageUrl(response.url);
+        if (response?.urls?.length > 0) {
+          setImageUrls(response.urls);
         } else {
           setError('No se encontró ninguna imagen en esta página');
         }
@@ -24,14 +24,13 @@ function App() {
       }
     }
 
-    fetchImage();
+    fetchImages();
   }, []);
 
-  function handleDownload() {
-    if (!imageUrl) return;
+  function handleDownload(url: string, index: number) {
     browser.downloads.download({
-      url: imageUrl,
-      filename: `instagram-post-${Date.now()}.jpg`,
+      url,
+      filename: `instagram-post-${Date.now()}-${index}.jpg`,
     });
   }
 
@@ -41,14 +40,14 @@ function App() {
 
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
-      {imageUrl && (
-        <>
-          <img src={imageUrl} alt="preview" style={{ width: '100%', borderRadius: 8 }} />
-          <button onClick={handleDownload} style={{ marginTop: 8, width: '100%' }}>
-            Descargar
+      {imageUrls.map((url, i) => (
+        <div key={url} style={{ marginBottom: 12 }}>
+          <img src={url} alt={`preview-${i}`} style={{ width: '100%', borderRadius: 8 }} />
+          <button onClick={() => handleDownload(url, i)} style={{ marginTop: 4, width: '100%' }}>
+            Descargar imagen {i + 1}
           </button>
-        </>
-      )}
+        </div>
+      ))}
     </div>
   );
 }
