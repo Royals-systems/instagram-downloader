@@ -8,3 +8,8 @@ popup version
 
 
 Next, I'll build it directly in the Instagram card itself.
+
+
+### important
+
+Do not overuse the download feature, as Instagram limits or even blocks access; therefore, for your own safety, we recommend exercising caution when downloading.

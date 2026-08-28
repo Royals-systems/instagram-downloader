@@ -3,6 +3,8 @@ export default defineContentScript({
   main() {
     console.log('[IG Downloader] Content script activo');
 
+    // ... (todas las funciones que ya tienes: getShortcodeFromUrl, getCsrfToken,
+    // fetchPostData, bestCandidateUrl, extractImageUrls, getPostImages se quedan igual)
     function getShortcodeFromUrl(): string | null {
       const match = window.location.pathname.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)/);
       return match ? (match[2] ?? null) : null;
@@ -68,6 +70,72 @@ export default defineContentScript({
       const json = await fetchPostData(shortcode);
       return extractImageUrls(json);
     }
+
+    async function downloadAllImages() {
+      const urls = await getPostImages();
+      await browser.runtime.sendMessage({ type: 'DOWNLOAD_IMAGES', urls });
+    }
+
+    function createDownloadButton(): HTMLButtonElement {
+      const btn = document.createElement('button');
+      btn.textContent = 'Download';
+      btn.id = 'ig-downloader-btn';
+      btn.style.cssText = `
+        background: #0095f6;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 5px 12px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-left: 8px;
+      `;
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        btn.textContent = '...';
+        btn.disabled = true;
+        try {
+          await downloadAllImages();
+          btn.textContent = 'Listo ✓';
+        } catch (err) {
+          console.error('[IG Downloader] Error al descargar:', err);
+          btn.textContent = 'Error';
+        }
+        setTimeout(() => {
+          btn.textContent = 'Download';
+          btn.disabled = false;
+        }, 2000);
+      });
+      return btn;
+    }
+
+    function findFollowButton(): HTMLElement | null {
+      const buttons = Array.from(document.querySelectorAll('button, div[role="button"]'));
+      return buttons.find(el =>
+        el.textContent?.trim() === 'Following' || el.textContent?.trim() === 'Follow'
+      ) as HTMLElement | null;
+    }
+
+    function injectButton() {
+      if (document.getElementById('ig-downloader-btn')) return; // ya existe, no duplicar
+
+      const followBtn = findFollowButton();
+      if (!followBtn) return;
+
+      const downloadBtn = createDownloadButton();
+      followBtn.insertAdjacentElement('afterend', downloadBtn);
+    }
+
+    // Reintenta inyectar cada vez que cambia el DOM (Instagram es SPA, navega sin recargar)
+    const observer = new MutationObserver(() => {
+      injectButton();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // Intento inicial
+    injectButton();
 
     browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === 'GET_POST_IMAGE') {
