@@ -183,15 +183,14 @@ function injectSinglePostButton() {
     }
 
 function injectFeedButton(article: HTMLElement) {
+  if (isPostPage()) return; // ya se encarga injectSinglePostButton en este caso
   if (article.dataset.igDownloaderDone === '1') return;
   article.dataset.igDownloaderDone = '1';
 
   const shortcode = getShortcodeFromArticle(article);
-  console.log('[IG Downloader] shortcode:', shortcode);
   if (!shortcode) return;
 
   const moreBtn = findMoreOptionsButton(article);
-  console.log('[IG Downloader] moreBtn:', moreBtn, 'parent:', moreBtn?.parentElement);
   if (!moreBtn || !moreBtn.parentElement) return;
 
   const btn = createDownloadButton(async () => {
@@ -199,7 +198,6 @@ function injectFeedButton(article: HTMLElement) {
     await downloadUrls(urls);
   }, 'ig-downloader-btn-feed');
   moreBtn.parentElement.insertBefore(btn, moreBtn);
-  console.log('[IG Downloader] botón insertado en article');
 }
     const feedIntersectionObserver = new IntersectionObserver(
       (entries) => {
