@@ -120,11 +120,13 @@ export default defineContentScript({
       return btn;
     }
 
-    function findMoreOptionsButton(scope: ParentNode = document): HTMLElement | null {
-      const svg = scope.querySelector('svg[aria-label="More options"], svg[aria-label="Más opciones"]');
-      if (!svg) return null;
-      return svg.closest('div[role="button"], button') as HTMLElement | null;
-    }
+function findMoreOptionsButton(scope: ParentNode = document): HTMLElement | null {
+  const svg = scope.querySelector(
+    'svg[aria-label="More options"], svg[aria-label="Más opciones"], svg[aria-label="More"], svg[aria-label="Más"]'
+  );
+  if (!svg) return null;
+  return svg.closest('div[role="button"], button') as HTMLElement | null;
+}
 
     // ---------- Modo 1: página de post individual (/p/... o /reel/...) ----------
 
