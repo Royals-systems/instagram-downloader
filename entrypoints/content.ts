@@ -4,17 +4,24 @@ export default defineContentScript({
     console.log('[IG Downloader] Content script activo');
 
     function findPostImage(): string | null {
-      // Instagram pone las imágenes de post dentro de <article>
-      const article = document.querySelector('article');
-      if (!article) return null;
+      const main = document.querySelector('main');
+      if (!main) return null;
 
-      const img = article.querySelector('img[srcset]') as HTMLImageElement | null;
-      if (!img) return null;
+      const imgs = Array.from(main.querySelectorAll('img')) as HTMLImageElement[];
 
-      // srcset trae varias resoluciones, tomamos la de mayor calidad (la última)
-      const srcset = img.srcset;
-      const urls = srcset.split(',').map(s => s.trim().split(' ')[0]);
-      return urls[urls.length - 1] || img.src;
+      // filtramos imágenes chicas (avatares, iconos) — el post real es grande
+      const candidates = imgs.filter(img => img.naturalWidth > 200);
+      if (candidates.length === 0) return null;
+
+      const img = candidates[0];
+
+      // si tiene srcset, tomamos la de mayor calidad; si no, usamos src directo
+      if (img?.srcset) {
+        const urls = img?.srcset.split(',').map(s => s.trim().split(' ')[0]);
+        return urls[urls.length - 1]?? null;
+      }
+
+      return img?.src ?? null;
     }
 
     // Escuchamos cuando el popup nos pida la imagen
