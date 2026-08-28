@@ -5,9 +5,21 @@ export default defineContentScript({
 
     // ---------- Utilidades compartidas ----------
 
+
+    function ensureFeedButtons() {
+      const articles = document.querySelectorAll('article');
+      articles.forEach(article => {
+        if ((article as HTMLElement).dataset.igDownloaderDone === '1') return;
+        injectFeedButton(article as HTMLElement);
+      });
+    }
     function getCsrfToken(): string {
       const match = document.cookie.match(/csrftoken=([^;]+)/);
       return match ? (match[1] ?? '') : '';
+    }
+
+    function sleep(ms: number) {
+      return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     async function fetchPostData(shortcode: string) {
@@ -80,49 +92,51 @@ export default defineContentScript({
       await browser.runtime.sendMessage({ type: 'DOWNLOAD_IMAGES', urls });
     }
 
-    function createDownloadButton(onClick: () => Promise<void>): HTMLButtonElement {
-      const btn = document.createElement('button');
-      btn.textContent = 'Download';
-      btn.className = 'ig-downloader-btn';
-      btn.style.cssText = `
-        background: #0095f6;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 4px 10px;
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        margin-left: 8px;
-        position: static;
-        display: inline-flex;
-        align-items: center;
-        flex-shrink: 0;
-      `;
-      btn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const original = btn.textContent;
-        btn.textContent = '...';
-        btn.disabled = true;
-        try {
-          await onClick();
-          btn.textContent = 'Listo ✓';
-        } catch (err) {
-          console.error('[IG Downloader] Error al descargar:', err);
-          btn.textContent = 'Error';
-        }
-        setTimeout(() => {
-          btn.textContent = original;
-          btn.disabled = false;
-        }, 2000);
-      });
-      return btn;
+function createDownloadButton(onClick: () => Promise<void>, extraClass: string): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.textContent = 'Download';
+  btn.className = `ig-downloader-btn ${extraClass}`;
+  btn.style.cssText = `
+    background: #0095f6;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: 8px;
+    position: static;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  `;
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const original = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+    try {
+      await onClick();
+      btn.textContent = 'Listo ✓';
+    } catch (err) {
+      console.error('[IG Downloader] Error al descargar:', err);
+      btn.textContent = 'Error';
     }
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.disabled = false;
+    }, 2000);
+  });
+  return btn;
+}
 
 function findMoreOptionsButton(scope: ParentNode = document): HTMLElement | null {
   const svg = scope.querySelector(
-    'svg[aria-label="More options"], svg[aria-label="Más opciones"], svg[aria-label="More"], svg[aria-label="Más"]'
+    'svg[aria-label="More options"], svg[aria-label="Más opciones"], ' +
+    'svg[aria-label="More"], svg[aria-label="Más"], ' +
+    'svg[aria-label="Menu"], svg[aria-label="Menú"]'
   );
   if (!svg) return null;
   return svg.closest('div[role="button"], button') as HTMLElement | null;
@@ -139,24 +153,24 @@ function findMoreOptionsButton(scope: ParentNode = document): HTMLElement | null
       return match ? (match[2] ?? null) : null;
     }
 
-    function injectSinglePostButton() {
-      if (!isPostPage()) {
-        document.querySelector('.ig-downloader-btn')?.remove();
-        return;
-      }
-      if (document.querySelector('.ig-downloader-btn')) return;
+function injectSinglePostButton() {
+  if (!isPostPage()) {
+    document.querySelector('.ig-downloader-btn-post')?.remove();
+    return;
+  }
+  if (document.querySelector('.ig-downloader-btn-post')) return;
 
-      const moreBtn = findMoreOptionsButton();
-      if (!moreBtn || !moreBtn.parentElement) return;
+  const moreBtn = findMoreOptionsButton();
+  if (!moreBtn || !moreBtn.parentElement) return;
 
-      const btn = createDownloadButton(async () => {
-        const shortcode = getShortcodeFromUrl();
-        if (!shortcode) throw new Error('No shortcode');
-        const urls = await getMediaUrlsForShortcode(shortcode);
-        await downloadUrls(urls);
-      });
-      moreBtn.parentElement.insertBefore(btn, moreBtn);
-    }
+  const btn = createDownloadButton(async () => {
+    const shortcode = getShortcodeFromUrl();
+    if (!shortcode) throw new Error('No shortcode');
+    const urls = await getMediaUrlsForShortcode(shortcode);
+    await downloadUrls(urls);
+  }, 'ig-downloader-btn-post');
+  moreBtn.parentElement.insertBefore(btn, moreBtn);
+}
 
     // ---------- Modo 2: feed principal (scroll infinito) ----------
 
@@ -168,34 +182,35 @@ function findMoreOptionsButton(scope: ParentNode = document): HTMLElement | null
       return match ? (match[2] ?? null) : null;
     }
 
-    function injectFeedButton(article: HTMLElement) {
-      if (article.dataset.igDownloaderDone === '1') return;
-      article.dataset.igDownloaderDone = '1';
+function injectFeedButton(article: HTMLElement) {
+  if (article.dataset.igDownloaderDone === '1') return;
+  article.dataset.igDownloaderDone = '1';
 
-      const shortcode = getShortcodeFromArticle(article);
-      if (!shortcode) return;
+  const shortcode = getShortcodeFromArticle(article);
+  console.log('[IG Downloader] shortcode:', shortcode);
+  if (!shortcode) return;
 
-      const moreBtn = findMoreOptionsButton(article);
-      if (!moreBtn || !moreBtn.parentElement) return;
+  const moreBtn = findMoreOptionsButton(article);
+  console.log('[IG Downloader] moreBtn:', moreBtn, 'parent:', moreBtn?.parentElement);
+  if (!moreBtn || !moreBtn.parentElement) return;
 
-      const btn = createDownloadButton(async () => {
-        const urls = await getMediaUrlsForShortcode(shortcode);
-        await downloadUrls(urls);
-      });
-      moreBtn.parentElement.insertBefore(btn, moreBtn);
-    }
-
-    // Solo inyecta cuando el post está por entrar en pantalla (barato, nativo del navegador)
+  const btn = createDownloadButton(async () => {
+    const urls = await getMediaUrlsForShortcode(shortcode);
+    await downloadUrls(urls);
+  }, 'ig-downloader-btn-feed');
+  moreBtn.parentElement.insertBefore(btn, moreBtn);
+  console.log('[IG Downloader] botón insertado en article');
+}
     const feedIntersectionObserver = new IntersectionObserver(
       (entries) => {
         entries.forEach(entry => {
           if (entry.isIntersecting) {
             injectFeedButton(entry.target as HTMLElement);
-            feedIntersectionObserver.unobserve(entry.target); // one-shot, ya no hace falta seguir vigilando
+            feedIntersectionObserver.unobserve(entry.target);
           }
         });
       },
-      { rootMargin: '300px' } // empieza a preparar un poco antes de que sea visible
+      { rootMargin: '300px' }
     );
 
     function watchNewArticles(nodes: NodeList | HTMLElement[]) {
@@ -210,8 +225,6 @@ function findMoreOptionsButton(scope: ParentNode = document): HTMLElement | null
       });
     }
 
-    // Observer acotado: solo mira childList (no subtree profundo) sobre main,
-    // y solo procesa los nodos añadidos directamente, no vuelve a escanear todo.
     const feedMutationObserver = new MutationObserver((mutations) => {
       mutations.forEach(mutation => {
         if (mutation.addedNodes.length > 0) {
@@ -219,28 +232,106 @@ function findMoreOptionsButton(scope: ParentNode = document): HTMLElement | null
         }
       });
     });
+    
+    let observedMain: HTMLElement | null = null;
 
     function startFeedWatcher() {
       const main = document.querySelector('main');
-      if (!main) return;
-      watchNewArticles(main.querySelectorAll('article')); // artículos ya presentes al cargar
+      if (!main || main === observedMain) return; // ya estamos observando este mismo <main>
+
+      observedMain = main as HTMLElement;
+      watchNewArticles(main.querySelectorAll('article'));
       feedMutationObserver.observe(main, { childList: true, subtree: true });
     }
 
-    // ---------- Arranque ----------
+    // ---------- Modo 3: stories ----------
 
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    function debouncedCheck() {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        injectSinglePostButton();
-      }, 300);
+    function isStoryPage(): boolean {
+      return window.location.pathname.startsWith('/stories/');
     }
 
-    const pageObserver = new MutationObserver(() => debouncedCheck());
-    pageObserver.observe(document.body, { childList: true, subtree: false });
+    function getStoryUsernameFromUrl(): string | null {
+      const match = window.location.pathname.match(/\/stories\/([^/]+)/);
+      return match ? (match[1] ?? null) : null;
+    }
+
+    function getCurrentStoryMediaUrl(): string | null {
+      const video = document.querySelector('video') as HTMLVideoElement | null;
+      if (video?.src) return video.src;
+
+      const imgs = Array.from(document.querySelectorAll('img')) as HTMLImageElement[];
+      const storyImg = imgs.find(img => img.naturalWidth > 400);
+      return storyImg?.src ?? null;
+    }
+
+    function clickNextStory(): boolean {
+      const nextBtn = document.querySelector('button[aria-label="Next"], svg[aria-label="Next"]');
+      const clickable = nextBtn?.closest('button, div[role="button"]') as HTMLElement | null ?? nextBtn as HTMLElement | null;
+      if (!clickable) return false;
+      clickable.click();
+      return true;
+    }
+
+    async function scanAllStories(): Promise<string[]> {
+      const startUsername = getStoryUsernameFromUrl();
+      const results: string[] = [];
+
+      for (let i = 0; i < 20; i++) {
+        await sleep(300);
+        const url = getCurrentStoryMediaUrl();
+        if (url && !results.includes(url)) results.push(url);
+
+        const clicked = clickNextStory();
+        if (!clicked) break;
+
+        await sleep(400);
+        if (getStoryUsernameFromUrl() !== startUsername) break;
+      }
+
+      return results;
+    }
+
+function injectStoryButton() {
+  if (!isStoryPage()) {
+    document.querySelector('.ig-downloader-btn-story')?.remove();
+    return;
+  }
+  if (document.querySelector('.ig-downloader-btn-story')) return;
+
+  const moreBtn = findMoreOptionsButton();
+  if (!moreBtn || !moreBtn.parentElement) return;
+
+  const btn = createDownloadButton(async () => {
+    const urls = await scanAllStories();
+    await downloadUrls(urls);
+  }, 'ig-downloader-btn-story');
+  moreBtn.parentElement.insertBefore(btn, moreBtn);
+}
+
+    // ---------- Arranque ----------
+
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+function debouncedCheck() {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    injectSinglePostButton();
+    injectStoryButton();
+  }, 300);
+}
+
+const pageObserver = new MutationObserver(() => debouncedCheck());
+pageObserver.observe(document.body, { childList: true, subtree: false });
+
+
+setInterval(() => {
+  injectSinglePostButton();
+  injectStoryButton();
+  startFeedWatcher();
+  ensureFeedButtons(); // red de seguridad para artículos que el IntersectionObserver no detectó
+}, 800);
 
     injectSinglePostButton();
+    injectStoryButton();
     startFeedWatcher();
 
     browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
