@@ -3,9 +3,11 @@ export default defineContentScript({
   main() {
     console.log('[IG Downloader] Content script activo');
 
-    // ... (todas las funciones que ya tienes: getShortcodeFromUrl, getCsrfToken,
-    // fetchPostData, bestCandidateUrl, extractImageUrls, getPostImages se quedan igual)
-    function getShortcodeFromUrl(): string | null {
+    function isPostPage(): boolean {
+      return /\/(p|reel|reels)\/[A-Za-z0-9_-]+/.test(window.location.pathname);
+    }
+
+   function getShortcodeFromUrl(): string | null {
       const match = window.location.pathname.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)/);
       return match ? (match[2] ?? null) : null;
     }
@@ -119,8 +121,11 @@ export default defineContentScript({
     }
 
     function injectButton() {
-      if (document.getElementById('ig-downloader-btn')) return; // ya existe, no duplicar
-
+      if (!isPostPage()) {
+        // si no estamos en un post, removemos el botón si quedó de una página anterior
+        document.getElementById('ig-downloader-btn')?.remove();
+        return;
+      }
       const followBtn = findFollowButton();
       if (!followBtn) return;
 
