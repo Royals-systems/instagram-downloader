@@ -10,10 +10,10 @@ popup version
 Next, I'll build it directly in the Instagram card itself.
 
 /reels 
-![alt text](image-5.png)
+![alt text](captions\image-2.png)
 
 /stories
-![alt text](image-4.png)
+![alt text](captions/image-4.png)
 
 ### important
 
