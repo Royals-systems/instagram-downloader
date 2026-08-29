@@ -89,27 +89,16 @@ export default defineContentScript({
     }
 
     async function downloadSingleUrl(url: string, index: number) {
-      // El CDN de Instagram rechaza descargas directas sin el origen correcto,
-      // y las URLs blob: de video en Stories se invalidan apenas Instagram
-      // avanza a la siguiente story — por eso esto se llama de inmediato al
-      // capturar cada media, nunca en batch al final.
+      // Firefox aplica CORS estricto a fetch() hecho desde un content script
+      // hacia otro dominio (el CDN de Instagram, fbcdn.net) — en Chrome esto
+      // pasaba sin problema, en Firefox lo bloquea con "NetworkError". Por eso
+      // el fetch real ocurre en el background, que sí tiene acceso privilegiado.
       try {
-        const res = await fetch(url, { credentials: 'omit' });
-        if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-        const blob = await res.blob();
-        const isVideo = blob.type.includes('video') || url.includes('.mp4');
+        const isVideo = url.includes('.mp4');
         const ext = isVideo ? 'mp4' : 'jpg';
-
-        const reader = new FileReader();
-        const dataUrl: string = await new Promise((resolve, reject) => {
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-
         await browser.runtime.sendMessage({
-          type: 'DOWNLOAD_BLOB',
-          dataUrl,
+          type: 'DOWNLOAD_URL',
+          url,
           filename: `instagram-post-${Date.now()}-${index + 1}.${ext}`,
         });
       } catch (err) {
