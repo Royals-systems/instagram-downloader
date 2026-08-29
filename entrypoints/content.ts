@@ -88,8 +88,41 @@ export default defineContentScript({
       return extractMediaUrls(json);
     }
 
+    async function downloadSingleUrl(url: string, index: number) {
+      // El CDN de Instagram rechaza descargas directas sin el origen correcto,
+      // y las URLs blob: de video en Stories se invalidan apenas Instagram
+      // avanza a la siguiente story — por eso esto se llama de inmediato al
+      // capturar cada media, nunca en batch al final.
+      try {
+        const res = await fetch(url, { credentials: 'omit' });
+        if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+        const blob = await res.blob();
+        const isVideo = blob.type.includes('video') || url.includes('.mp4');
+        const ext = isVideo ? 'mp4' : 'jpg';
+
+        const reader = new FileReader();
+        const dataUrl: string = await new Promise((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+
+        await browser.runtime.sendMessage({
+          type: 'DOWNLOAD_BLOB',
+          dataUrl,
+          filename: `instagram-post-${Date.now()}-${index + 1}.${ext}`,
+        });
+      } catch (err) {
+        console.error('[IG Downloader] Fallo al descargar', url, err);
+      }
+    }
+
     async function downloadUrls(urls: string[]) {
-      await browser.runtime.sendMessage({ type: 'DOWNLOAD_IMAGES', urls });
+      for (let i = 0; i < urls.length; i++) {
+        const url = urls[i];
+        if (!url) continue;
+        await downloadSingleUrl(url, i);
+      }
     }
 
 function createDownloadButton(onClick: () => Promise<void>, extraClass: string): HTMLButtonElement {
@@ -287,14 +320,19 @@ function injectFeedButton(article: HTMLElement) {
       return true;
     }
 
-    async function scanAllStories(): Promise<string[]> {
+    async function scanAllStories(): Promise<void> {
       const startUsername = getStoryUsernameFromUrl();
-      const results: string[] = [];
+      const seen = new Set<string>();
+      let downloadIndex = 0;
 
       for (let i = 0; i < 20; i++) {
         await sleep(300);
         const url = getCurrentStoryMediaUrl();
-        if (url && !results.includes(url)) results.push(url);
+        if (url && !seen.has(url)) {
+          seen.add(url);
+          await downloadSingleUrl(url, downloadIndex); // descarga ya, antes de que se invalide el blob
+          downloadIndex++;
+        }
 
         const clicked = clickNextStory();
         if (!clicked) break;
@@ -302,25 +340,38 @@ function injectFeedButton(article: HTMLElement) {
         await sleep(400);
         if (getStoryUsernameFromUrl() !== startUsername) break;
       }
-
-      return results;
     }
 
-function injectStoryButton() {
+// Mismo patrón que ensureFloatingButton: vive fuera del árbol de React,
+// así no depende de encontrar el ícono "..." (que cambia de aria-label según
+// la vista) ni se pierde si Instagram recicla nodos al pasar de story en story.
+let floatingStoryBtn: HTMLButtonElement | null = null;
+
+function ensureFloatingStoryButton() {
   if (!isStoryPage()) {
-    document.querySelector('.ig-downloader-btn-story')?.remove();
+    floatingStoryBtn?.remove();
+    floatingStoryBtn = null;
     return;
   }
-  if (document.querySelector('.ig-downloader-btn-story')) return;
 
-  const moreBtn = findMoreOptionsButton();
-  if (!moreBtn || !moreBtn.parentElement) return;
+  const currentUsername = getStoryUsernameFromUrl();
+
+  if (floatingStoryBtn && floatingStoryBtn.dataset.username === currentUsername) return;
+
+  floatingStoryBtn?.remove();
 
   const btn = createDownloadButton(async () => {
-    const urls = await scanAllStories();
-    await downloadUrls(urls);
+    await scanAllStories();
   }, 'ig-downloader-btn-story');
-  moreBtn.parentElement.insertBefore(btn, moreBtn);
+
+  btn.dataset.username = currentUsername ?? '';
+  btn.style.position = 'fixed';
+  btn.style.top = '16px';
+  btn.style.right = '16px';
+  btn.style.zIndex = '999999';
+
+  document.body.appendChild(btn);
+  floatingStoryBtn = btn;
 }
 
     // ---------- Arranque ----------
@@ -330,7 +381,7 @@ function debouncedCheck() {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     ensureFloatingButton();
-    injectStoryButton();
+    ensureFloatingStoryButton();
   }, 300);
 }
 
@@ -340,13 +391,13 @@ pageObserver.observe(document.body, { childList: true, subtree: false });
 
 setInterval(() => {
   ensureFloatingButton();
-  injectStoryButton();
+  ensureFloatingStoryButton();
   startFeedWatcher();
   ensureFeedButtons(); // red de seguridad para artículos que el IntersectionObserver no detectó
 }, 800);
 
     ensureFloatingButton();
-    injectStoryButton();
+    ensureFloatingStoryButton();
     startFeedWatcher();
 
     browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
