@@ -153,15 +153,24 @@ function findMoreOptionsButton(scope: ParentNode = document): HTMLElement | null
       return match ? (match[2] ?? null) : null;
     }
 
-function injectSinglePostButton() {
+// Reels usa virtualización de React: los nodos se reciclan al scrollear y
+// cualquier botón insertado DENTRO del árbol de React se pierde al re-renderizar.
+// Por eso este botón vive fuera de ese árbol, como hijo directo de <body>,
+// posicionado con position:fixed. React nunca lo toca.
+let floatingBtn: HTMLButtonElement | null = null;
+
+function ensureFloatingButton() {
   if (!isPostPage()) {
-    document.querySelector('.ig-downloader-btn-post')?.remove();
+    floatingBtn?.remove();
+    floatingBtn = null;
     return;
   }
-  if (document.querySelector('.ig-downloader-btn-post')) return;
 
-  const moreBtn = findMoreOptionsButton();
-  if (!moreBtn || !moreBtn.parentElement) return;
+  const currentShortcode = getShortcodeFromUrl();
+
+  if (floatingBtn && floatingBtn.dataset.shortcode === currentShortcode) return; // mismo post, nada que hacer
+
+  floatingBtn?.remove(); // si había uno de otro post/reel, lo quitamos
 
   const btn = createDownloadButton(async () => {
     const shortcode = getShortcodeFromUrl();
@@ -169,7 +178,15 @@ function injectSinglePostButton() {
     const urls = await getMediaUrlsForShortcode(shortcode);
     await downloadUrls(urls);
   }, 'ig-downloader-btn-post');
-  moreBtn.parentElement.insertBefore(btn, moreBtn);
+
+  btn.dataset.shortcode = currentShortcode ?? '';
+  btn.style.position = 'fixed';
+  btn.style.top = '16px';
+  btn.style.right = '16px';
+  btn.style.zIndex = '999999';
+
+  document.body.appendChild(btn);
+  floatingBtn = btn;
 }
 
     // ---------- Modo 2: feed principal (scroll infinito) ----------
@@ -183,7 +200,7 @@ function injectSinglePostButton() {
     }
 
 function injectFeedButton(article: HTMLElement) {
-  if (isPostPage()) return; // ya se encarga injectSinglePostButton en este caso
+  if (isPostPage()) return; // en post/reel individual, ensureFloatingButton se encarga
   if (article.dataset.igDownloaderDone === '1') return;
   article.dataset.igDownloaderDone = '1';
 
@@ -312,7 +329,7 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedCheck() {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
-    injectSinglePostButton();
+    ensureFloatingButton();
     injectStoryButton();
   }, 300);
 }
@@ -322,13 +339,13 @@ pageObserver.observe(document.body, { childList: true, subtree: false });
 
 
 setInterval(() => {
-  injectSinglePostButton();
+  ensureFloatingButton();
   injectStoryButton();
   startFeedWatcher();
   ensureFeedButtons(); // red de seguridad para artículos que el IntersectionObserver no detectó
 }, 800);
 
-    injectSinglePostButton();
+    ensureFloatingButton();
     injectStoryButton();
     startFeedWatcher();
 
