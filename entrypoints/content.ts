@@ -303,13 +303,101 @@ function injectFeedButton(article: HTMLElement) {
       return match ? (match[1] ?? null) : null;
     }
 
-    function getCurrentStoryMediaUrl(): string | null {
-      const video = document.querySelector('video') as HTMLVideoElement | null;
-      if (video?.src) return video.src;
+    function isLargeVisible(el: HTMLElement): boolean {
+      const rect = el.getBoundingClientRect();
+      // la story activa ocupa una porción grande y real de la pantalla;
+      // las miniaturas laterales (previews de otras cuentas) son mucho más chicas
+      return rect.width > 250 && rect.height > 250 && el.offsetParent !== null;
+    }
 
+    function getActiveStoryVideo(): HTMLVideoElement | null {
+      const videos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
+      return videos.find(v => (v.currentSrc || v.src) && isLargeVisible(v)) ?? null;
+    }
+
+    function getActiveStoryImage(): HTMLImageElement | null {
       const imgs = Array.from(document.querySelectorAll('img')) as HTMLImageElement[];
-      const storyImg = imgs.find(img => img.naturalWidth > 400);
-      return storyImg?.src ?? null;
+      const candidates = imgs.filter(img => img.naturalWidth > 400 && isLargeVisible(img));
+      candidates.sort((a, b) => {
+        const ra = a.getBoundingClientRect();
+        const rb = b.getBoundingClientRect();
+        return (rb.width * rb.height) - (ra.width * ra.height);
+      });
+      return candidates[0] ?? null;
+    }
+
+    // El src del <video> en Stories es un blob: de MediaSource (streaming adaptativo),
+    // no un archivo real — fetch() sobre eso siempre falla con "Failed to fetch".
+    // La única forma confiable de obtenerlo es grabar lo que el <video> reproduce,
+    // usando las APIs nativas captureStream + MediaRecorder.
+    async function captureActiveVideoBlob(video: HTMLVideoElement): Promise<Blob> {
+      // captureStream() graba desde el instante en que empieza la grabación, no
+      // desde el inicio del video. Si el usuario le da al botón a mitad de la
+      // story, solo se captura el resto — y el archivo resultante sale con
+      // metadata rota (duración 0:00, sin seek). Por eso rebobinamos a 0 primero.
+      video.pause();
+      video.currentTime = 0;
+
+      await new Promise<void>((resolve) => {
+        video.addEventListener('seeked', () => resolve(), { once: true });
+        setTimeout(resolve, 800); // límite de seguridad si el seek no dispara
+      });
+
+      // MediaRecorder solo captura frames mientras el video reproduce activamente;
+      // si está pausado (Instagram lo pausa a veces cuando DevTools roba el foco),
+      // el resultado sale vacío (solo el header del archivo, ~110 bytes).
+      // Por eso forzamos play() y esperamos a que realmente esté reproduciendo.
+      try {
+        await video.play();
+      } catch {
+        // el navegador puede bloquear autoplay con audio; seguimos igual,
+        // el video puede seguir corriendo silenciado
+      }
+
+      if (video.paused) {
+        await new Promise<void>((resolve) => {
+          video.addEventListener('playing', () => resolve(), { once: true });
+          setTimeout(resolve, 1500); // límite de seguridad si nunca dispara 'playing'
+        });
+      }
+
+      return new Promise((resolve, reject) => {
+        const anyVideo = video as any;
+        const stream: MediaStream | null = anyVideo.captureStream
+          ? anyVideo.captureStream()
+          : anyVideo.mozCaptureStream
+            ? anyVideo.mozCaptureStream()
+            : null;
+        if (!stream) {
+          reject(new Error('captureStream no soportado'));
+          return;
+        }
+
+        const chunks: BlobPart[] = [];
+        const recorder = new MediaRecorder(stream, {
+          mimeType: 'video/webm',
+          videoBitsPerSecond: 2_000_000, // limitamos el bitrate para bajar la carga de CPU al codificar
+        });
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunks.push(e.data);
+        };
+        recorder.onstop = () => resolve(new Blob(chunks, { type: 'video/webm' }));
+        recorder.onerror = (e) => reject(e);
+
+        recorder.start(1000); // vuelca datos cada 1s (menos overhead que cada 250ms)
+
+        // Si el video ya terminó o dura muy poco, cortamos con un límite de seguridad;
+        // si no, grabamos hasta que termine (evento 'ended') para capturarlo completo.
+        const maxMs = 20000;
+        const safetyTimer = setTimeout(() => {
+          if (recorder.state !== 'inactive') recorder.stop();
+        }, maxMs);
+
+        video.addEventListener('ended', () => {
+          clearTimeout(safetyTimer);
+          if (recorder.state !== 'inactive') recorder.stop();
+        }, { once: true });
+      });
     }
 
     function clickNextStory(): boolean {
@@ -320,25 +408,83 @@ function injectFeedButton(article: HTMLElement) {
       return true;
     }
 
-    async function scanAllStories(): Promise<void> {
-      const startUsername = getStoryUsernameFromUrl();
-      const seen = new Set<string>();
-      let downloadIndex = 0;
+    async function downloadBlobDirect(blob: Blob, index: number, ext: string) {
+      const reader = new FileReader();
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      await browser.runtime.sendMessage({
+        type: 'DOWNLOAD_BLOB',
+        dataUrl,
+        filename: `instagram-post-${Date.now()}-${index + 1}.${ext}`,
+      });
+    }
 
-      for (let i = 0; i < 20; i++) {
-        await sleep(300);
-        const url = getCurrentStoryMediaUrl();
-        if (url && !seen.has(url)) {
-          seen.add(url);
-          await downloadSingleUrl(url, downloadIndex); // descarga ya, antes de que se invalide el blob
-          downloadIndex++;
+    async function waitForNewVideoSrc(lastSrc: string | null, timeoutMs = 1200): Promise<HTMLVideoElement | null> {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        const video = getActiveStoryVideo();
+        if (video) {
+          const src = video.currentSrc || video.src;
+          if (src && src !== lastSrc) return video;
+        } else {
+          return null; // ya no hay video (es imagen), no seguimos esperando
         }
+        await sleep(100);
+      }
+      return getActiveStoryVideo(); // se acabó el tiempo, usamos lo que haya (mejor que nada)
+    }
 
-        const clicked = clickNextStory();
-        if (!clicked) break;
+    // Mientras esté grabando un video de story, pausamos todo el trabajo de
+    // fondo (setInterval, MutationObserver) para no saturar el hilo principal —
+    // eso causaba que Instagram tartamudeara y su reproductor "retrocediera"
+    // para recuperar el buffer, y grabábamos ese tartamudeo también.
+    let isCapturingStory = false;
 
-        await sleep(400);
-        if (getStoryUsernameFromUrl() !== startUsername) break;
+    async function scanAllStories(): Promise<void> {
+      isCapturingStory = true; // pausa el trabajo de fondo (setInterval, observers) mientras grabamos
+      try {
+        const startUsername = getStoryUsernameFromUrl();
+        const seenImageUrls = new Set<string>();
+        let lastVideoSrc: string | null = null;
+        let downloadIndex = 0;
+
+        for (let i = 0; i < 20; i++) {
+          await sleep(300);
+
+          // Instagram reutiliza el mismo <video> entre slides consecutivos de video
+          // y actualiza su src de forma asíncrona — esperamos a que realmente cambie
+          // antes de grabar, si no capturamos un stream vacío (0 bytes).
+          const video = await waitForNewVideoSrc(lastVideoSrc);
+          if (video) {
+            lastVideoSrc = video.currentSrc || video.src;
+            try {
+              const blob = await captureActiveVideoBlob(video); // espera a que termine el video
+              await downloadBlobDirect(blob, downloadIndex, 'webm');
+              downloadIndex++;
+            } catch (err) {
+              console.error('[IG Downloader] Fallo al capturar video de story', err);
+            }
+          } else {
+            const img = getActiveStoryImage();
+            const url = img?.src ?? null;
+            if (url && !seenImageUrls.has(url)) {
+              seenImageUrls.add(url);
+              await downloadSingleUrl(url, downloadIndex);
+              downloadIndex++;
+            }
+          }
+
+          const clicked = clickNextStory();
+          if (!clicked) break;
+
+          await sleep(400);
+          if (getStoryUsernameFromUrl() !== startUsername) break;
+        }
+      } finally {
+        isCapturingStory = false; // reanuda el trabajo de fondo pase lo que pase
       }
     }
 
@@ -378,8 +524,10 @@ function ensureFloatingStoryButton() {
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedCheck() {
+  if (isCapturingStory) return; // no interferir mientras se graba un video
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
+    if (isCapturingStory) return;
     ensureFloatingButton();
     ensureFloatingStoryButton();
   }, 300);
@@ -390,6 +538,7 @@ pageObserver.observe(document.body, { childList: true, subtree: false });
 
 
 setInterval(() => {
+  if (isCapturingStory) return; // pausado mientras se graba un video de story
   ensureFloatingButton();
   ensureFloatingStoryButton();
   startFeedWatcher();
