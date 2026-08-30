@@ -1,5 +1,6 @@
 # WXT + React
 [wiki](https://github.com/Royals-systems/instagram-downloader/wiki)
+
 This template should help get you started developing with React in WXT.
 
 ## fist version: only post
@@ -9,11 +10,13 @@ popup version
 ### /post
 Next, I'll build it directly in the Instagram card itself.
 ![alt text](captions/image-2.png)
-### /reels 
 
+### /reels 
+user can download any reel
 ![alt text](captions/image.png)
 
 ### /stories
+user can download any story but feed isn't possible
 ![alt text](captions/image-4.png)
 
 ### important
