@@ -15,4 +15,9 @@ export default defineConfig({
       },
     },
   },
+  webExt: {
+    binaries: {
+      firefox: 'C:\\Program Files\\WindowsApps\\Mozilla.Firefox_154.0.1.0_x64__n80bbvh6b1yt2\\VFS\\ProgramFiles\\Mozilla Firefox\\firefox.exe',
+    },
+  },
 });
